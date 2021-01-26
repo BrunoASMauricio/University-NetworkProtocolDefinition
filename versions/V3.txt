@@ -1,0 +1,1103 @@
+V3
+
+	0. Index
+
+		1: Abstract
+			Short description of the protocol and it's capabilities.
+		2: Version Changes
+			The changes made between major protocol versions (V X to V X+1).
+		3: Keywords
+			Words that carry a special/particular meaning to the protocol, used
+			throughout this document.
+		4: Messages
+			The messages used by the protocol, their formats, fields and
+			respective meaning and size.
+		5: Protocol Operation		
+			The in-depth explanation on the inner workings of the protocol.
+			This section details the message exchanges and respective state
+			changes as well as details on timeouts and other node actions.
+		6: Edge Cases
+			A brief description on possible edge cases and how they are mitigated,
+			eliminated, or avoided.
+			References to this section are made throughout the document, where
+			the relevant measures are taken so they don't seem out-of-place.
+		7: Relevant numbers and Equations
+			Throughout the document, there are numbers and equations that
+			influence behaviors and help build certain messages.
+			This section defines those numbers and equations.
+		8: Protocol requirements
+			In order to ensure proper protocol function, there are some network
+			and inter-team communication requirements.
+			This section describes said requirements.
+		9: Equation and number proofs
+			Even though most numbers can be ascertained from simulation trials,
+			the required equations and some of those numbers need some more
+			thought put into them.
+			This section details the assumptions, proofs and reasons for choosing
+			the parameters and equations in section 7 as well as the requirements
+			in section 8.
+		10: Possible Limitations
+			It is impossible to develop a perfect protocol, so like any other,
+			our protocol has limitations.
+			This section details those limitations.
+		11: Future work
+			What can still be improved in the protocol.
+		12: Notes
+			Miscelaneous notes on the protocol.
+
+
+	1. Abstract
+
+	This protocols' main purpose is to be extremely light weight,
+	auto configure a connection between multiple slaves and a master,
+	and to send sample loaded messages through the slaves all the way,
+	up to the master, through the most efficient route possible.
+
+	Network wise, this protocol is analogous to a tree, where the more distant
+	nodes (like leafs) connect to nodes slightly closer (branches), that
+	themselves connect to closer branches of nodes, all culminating in the master (trunk).
+
+	All nodes begin communicating through Random Access in a controlled manner before having
+	a timeslot attributed. The timeslot attribution policy is Round Robin. From henceforth,
+	the nodes communicate through TDMA.
+	
+	2. Version Changes
+
+	V1 to V2
+	The main changes in this version are as follows:
+		Broadcasts:
+			Behave like a three way handshake
+				Broadcast (one to many)	<--N1-->
+				Reply (one to one)	N2-->N1
+				Complement (one to one)	N1-->N2
+			Carry connection quality information:
+				Broadcast	Current Best N1->Master link quality
+				Reply		Current Best N2->Master link quality
+						N2-->N1 quality
+				Complement	N1-->N2 quality
+			Implicit information:
+				Broadcast	Has connection to master
+				Reply
+				Complement	Node received reply (ACK)
+
+		Network formation works differently:
+			The Master is the one that starts the network process;
+			Slaves enter the network either by communicating directly with
+			the master after receiving it's broadcast, or by proxy (through
+			a slave that can be identified as communicating with the master).
+			
+			The base approach is still based on random access with random (but
+			limited) timeouts and backoffs, but the network flood is mitigated
+			by the use of ACKs, and other mechanisms explained further down.
+	V2 to V3
+		Added node "state" definition and changes where appropriate;
+		Added edge case section, and mentions throughout the protocol definition
+		where these cases are addressed;
+		Updated most protocol sections based on issues discovered during
+		experimentation with the simulator;
+		Set the numbers and equations section to the current numbers and equations;
+		Changed some protocol message field names;
+		Removed some protocol message fields;
+		Added "Inside Slave" and "State" keywords.
+
+
+	3. Keywords
+		Node
+			The device that has data to send to the HW software,
+			and communicates with other Nodes through the WF software.
+		Master
+			The node that has connection to the HW software, and is the
+			data sink for the sampled data.
+		Slave
+			Nodes that must enter the network, and find their best Proxy
+			to make their data reach the Master as quickly as possible.
+		Proxy
+			A slave that retransmits other slaves' messages.
+		Sub-Slave
+			A sub-slave communicates with a Master via a Proxy;
+			It is considered sub-slave to that proxy.
+		Outside Slave
+			A Slave that does not yet have a transmission timeslot
+		Inside Slave
+			A Slave that has a transmission timeslot assigned to it
+		Timetable
+			A table that assigns each Slave to their respective timeslot,
+			including the Master.
+		State
+			A nodes' state can be
+			"Inside"
+				Then node has a timeslot assigned by the Master.
+			"Waiting"
+				The node is waiting for the Master to generate the next
+				Timetable.
+			"Outside"
+				The node is waiting for a PB from an Inside node.
+		List
+			A simple list without repeated values
+
+	4. Messages
+	
+	Unless stated otherwise, all fields are unsigned integers.
+
+		4.1. Global header
+	0
+	0 1 2 3 4 5 6 7 8
+	+-+-+-+-+-+-+-+-+
+	|Version| Type  |
+	+-+-+-+-+-+-+-+-+
+
+	Version			The protocol version. A constant on this document
+	(4 bits)
+	
+	Type			The message type.
+	(4 bits)
+	
+
+		4.2. Sampled Data (SD) Message Format (56+ bits)
+
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |           Source IP           |          Next Hop IP          |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	4                   5                   6                   7
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Seq Nmb|  TTL  |  Payload size |     Byte 1    |     Byte 2    |  . . .
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	The format of the Sampled Data Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			1
+	(4 bits)
+
+	Source IP		The original senders' IP
+	(2 bytes)
+	
+	Next Hop Ip		The IP of the next hop
+	(2 bytes)
+
+	Sequence Nmb		The Sequence number of this message Modulus 256
+	(4 bits)		May be replaced with a timestamp. Depending on the
+				amount of samples per message, may be used to reorder
+				messages
+
+	TTL			The Time To Live of the message
+	(4 bits)
+	
+	Payload Size		The amount of bytes in this message
+	(1 byte)
+
+	Byte n			The nth byte
+	(1 byte)
+
+
+		4.3. Ping Broadcast (PB) Message Format (56 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |            Sender IP          |              PBID             |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	4                   5
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|          Distance             |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+
+	The format of the Ping Broadcast Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			2
+	(4 bits)
+
+	Sender IP		The IP of the sending node
+	(2 bytes)
+
+	PBID			A sequence number uniquely identifying the
+	(2 bytes)		particular broadcast when taken in conjunction
+				with the Sender node's IP address.
+	
+	Distance		The Senders' current best distance to the master;
+	(2 bytes)		The master is the only node with 0 distance;
+	                        All others must limit their distance from 1
+	                        to 65534;
+	                        A value of 65535 indicates unreachability.
+
+
+		4.4. Ping Reply (PR) Message Format (104 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |         Sender IP             |      Originator nodes' IP     |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	4                   5                   6                   7                   8
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|           PBID                |          Distance             |    Quality    |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	                                        1
+	8                   9                   0
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|             Quality (cont.)                   |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	The format of the Ping Reply Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			3
+	(4 bits)
+
+	Sender IP		The senders' IP address
+	(2 bytes)
+
+	Originator nodes' IP		The IP of the node that originated the
+	(2 bytes)			broadcast
+
+	PBID			A sequence number uniquely identifying the
+	(2 bytes)		particular conversation when taken in conjunction
+				with the Originator node's IP address.
+	
+	Distance			The Senders' current best distance
+	(2 bytes)		the master;
+	                        The master is the only node with 0 distance;
+	                        All others must limit their distance from 1
+	                        to 65534;
+	                        A value of 65535 indicates unreachability.
+
+	Quality			The Quality of the received Originator nodes'
+	float			message on the sender.
+	(4 bytes)
+
+		4.5. Ping Complement (PC) Message Format (88 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |         Sender IP             |        Reached nodes' IP      |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	4                   5                   6                   7                   8
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|           PBID                |                    Quality                    |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	
+	8
+	0 1 2 3 4 5 6 7 8
+	+-+-+-+-+-+-+-+-+
+	|Quality (cont.)|
+	+-+-+-+-+-+-+-+-+
+
+
+	The format of the Ping Complement Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			4
+	(4 bits)
+
+	Sender IP		The senders' IP address
+	(2 bytes)
+
+	Reached nodes' IP	The IP of the node that was reached by he broadcast
+	(2 bytes)
+
+	PBID			A sequence number uniquely identifying the
+	(2 bytes)		particular conversation when taken in conjunction
+				with the Reached node's IP address.
+
+	Quality			The quality of the received Reached Nodes'
+	float			message on the sender.
+	(4 bytes)
+
+		4.6. Timetable Broadcast (TB) Message Format (144 bits)
+	0
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |            Sender IP          |              PBID             |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	4                   5                   6                   7                   8
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|                           Synchronization Timestamp                           |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	                                        1
+	8                   9                   0                   1                   2
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|      Synchronization Timestamp (cont.)        |         Validity Delay        |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	1
+	2                   3                   4                   5                   6
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	| Timeslot Size |         Table Size (N)        |        IP for timeslot 0      |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	1
+	6                   7
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6      ...
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|       IP for timeslot 1       |      ...      |      IP for timeslot N-1      |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+
+	x             ...                  x+N
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|         Required IP bitmap        |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+
+
+	The format of the Timetable Broadcast Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			5
+	(4 bits)
+
+	Sender IP		The IP of the sending node
+	(2 bytes)
+
+	PBID			A sequence number uniquely identifying the
+	(2 bytes)		particular broadcast when taken in conjunction
+				with the Sender node's IP address.
+
+	Synchronization Timestamp	The time at which the Timetable was sent from the
+	(8 bytes)			previous node (in ns)
+
+	Validity Delay		The difference between the Synchronization timestamp and
+	(2 bytes)		the time the Timetable is valid (Timetable deadline), in ns
+
+	Timeslot Size		How many ms there are per timeslot
+	(1 byte)
+
+	Table Size		The ammount of timeslot entries in the table;
+	(2 bytes)		Each entry has an associated IP.
+
+	IP for timeslot n	The IP that is assigned to timeslot n
+	(2 bytes)
+
+	Required IP bitmap	A bitmap that informs which Slave IP TAs' are still required
+	(2 bytes)		The order is the same as in the timetable (Slave in position
+				n, reads the nth bit from the bitmap
+	
+
+		4.7. Timetable Acknowledgment (TA) Message Format (56 bits)
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |         Sender IP             |      Originator nodes' IP     |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	4                   5
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|           PBID                |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+
+	The format of the Timetable Acknowledgment Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			6
+	(4 bits)
+
+	Sender IP		The senders' IP address
+	(2 bytes)
+
+	Originator nodes' IP		The IP of the node that originated the
+	(2 bytes)			broadcast
+
+	PBID			A sequence number uniquely identifying the
+	(2 bytes)		particular conversation when taken in conjunction
+				with the Originator node's IP address.
+
+		4.8. Network Entry [Pending] (NE | NEP) Message Format (40 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |         Sender IP             |      Proxy/Outsiders' IP      |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+
+	The format of the Network Entry [Pending] Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			7 for Network Entry | 8 for Network Entry Pending
+	(4 bits)
+
+	Sender IP		The senders' IP address
+	(2 bytes)
+
+	Proxy IP		The chosen proxys' IP | The outsider nodes' IP
+	(2 bytes)
+
+		4.9. Network Entry Request (NER) Message Format (40 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |          Next Hop IP          |          Outsiders' IP        |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	The format of the Network Entry Request Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			9
+	(4 bits)
+
+	Next Hop IP		The next hop' IP address
+	(2 bytes)
+
+	Proxy IP		The outsider nodes' IP
+	(2 bytes)
+
+		4.10. Network Entry Acceptance (NEA) Message Format (40 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Version| Type  |          Outsiders' IP        |           PBID                |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	The format of the Network Entry Acceptance Message is illustrated above, and
+	contains the following fields:
+
+	Version			3
+	(4 bits)
+
+	Type			10
+	(4 bits)
+
+	Proxy IP		The outsider nodes' IP
+	(2 bytes)
+
+	PBID			A sequence number uniquely identifying the
+	(2 bytes)		particular conversation when taken in conjunction
+				with the Outsider's IP address.
+
+
+	5. Protocol Operation
+
+	This section describes the scenarios under which nodes generate
+	and receive each type of message, and the actions that must follow.
+
+		5.1. Booting Up
+
+	When a node first comes online, it must perform some bootstraping
+		* If the node can communicate with the HW software, it becomes
+		the master. Otherwise, it is a slave. This is viable since we
+		are sure that the network was properly assembled. This method
+		avoids hard coding, allowing for different nodes to become master
+		just by turning off the HW software in the current master,
+		turning it it on, in the next master, and restarting the protocol;
+
+		* If the node is a master, it sends a PB (4.3.) with the Distance
+		field at 0, periodically (7.1.);
+
+		* If the node is a slave, it remains silent until it receives
+		a broadcast (5.2.).
+
+		5.2. Entering the network
+
+	A node can enter the network directly or via a proxy.
+		1) An Outside Slave receives a PB Message that has a non-unreachable
+		distance to the Master, and thus indicates that that Slave already belongs
+		to the Network (is in the "Inside" state);
+		2) The Slave that sent that PB Message becomes the Proxy to the Outside
+		Slave that received it;
+		3) The Outside Slave sends an NE (4.8.) Message to the Proxy and changes
+		its' state from "Outside" to "Waiting". It sets a up a retransmission  of
+		the NE message (7.3.) until it receives an NEP (4.8.) Message;
+			The Outside Slave only sends up to a certain number of NE (7.11.)
+			before resetting its' state back to "Outside" and stopping the NE
+			retransmission. This serves to ensure the node doesn't get stuck
+			forever in edge case 6.1;
+		5) After receiving the NEP, the outside Slave then waits for a
+		TB (4.6.) (5.8);
+			This wait makes it so an OutsideSlave (that doesn't have a timeslot
+			assigned and must communicate using Random Access instead of TDMA)
+			has minimum impact on the network;
+		6) Once the received Timetable is valid, the Slave begins transmitting only
+		on its respective timeslot (TDMA). It changes its' state to "Inside".
+		7)
+		7) If the TB isn't received ... ?
+
+		5.3. Proxy
+
+	A Slave can become a proxy, either by receiving SD(4.2.)/NER (4.9.) Messages
+	to re-transmit:
+		1) Receives an SD/NER Message with its' IP as the Next Hop IP
+		2) The Sender IP is registered as a Sub-Slave. If it is already registered,
+		only the "LastHeard" time is updated;
+		For SD messages
+			If the node is a Slave:
+				1) Changes the Next Hop IP to its' best Next Hop and
+				retransmits the Message.
+			If the node is the Master:
+				1) It retrieves the relevant payload information, and
+				forwards it to the HW teams' interface.
+		For NER messages
+			If the node is a Slave:
+				1) If the OutsideIP is in the "Outside Pending" list,
+				it ignores the message;
+				2) Otherwise, adds the OutsideIP to the "Outside Pending"
+				list and retransmits the NER
+					This is to prevent edge case 6.2.
+			If the node is a Master:
+				1) Begins 5.6. and 5.7. .
+
+	Or by receiving an NE Message:
+		1) Receives an NE Message with its IP as the Proxy IP;
+		2) Sends an NEP Message to the Outside Slave;
+		3) The Sender IP is registered as both Sub-Slave and Outside Slave;
+		If the node is a Slave:
+			1) Sends an NER Message through the Network to the Master,
+			and schedules re-transmission (7.4.) until it receives an NEA;
+			2) Receives an NEA Message for its' Outside Slave.
+
+                If the node is the Master:
+                        1) Begins with 5.6. and 5.7.
+
+	Proxies will also receive NEA Messages destined to their Sub-Slaves:
+		1) Receive the NEA Message
+		2) If the OutsiderIP isn't in the "Outside Pending", the node ignores the NEA.
+		3) Otherwise, retransmits the NEA and removes the OutsiderIP from the "Outside
+		Pending" list
+			This prevents edge case 6.2. .
+
+	When a Proxy receives a TB message it retransmits it if
+		1) The TB-BitMap message contains either its' IP or the IP of any of its'
+		Sub-Slaves at "1";
+		2) And if the TB PBID is larger than the stored one or the the TB provided
+		a new Timetable and the PBID is 0 (the first one);
+			This prevents edge case 6.4. .
+	If the TB-BitMap has its' IP, it also sends a TA (4.7.).
+	When it receives a new Timetable from a TB, a node clears all its TA PBID-IP entries.
+		This helps prevent edge case 6.3.
+	
+	When a Proxy receives a TA message it retransmits it if
+		1) The Originator node is a Sub Slave
+		2) And
+			2.1) The existing PBID-IP pair does not exist
+			2.2) Or The existing PBID associated to the Originator IP is newer
+			(aka larger)
+				This prevents edge case 6.3.
+		If the conditions for retransmission are met, the new PBID-IP pair is inserted
+		(replacing the old one if it ever existed);
+
+		5.4. Broadcasting
+
+	To improve the routes over time, every Inside Slave sends a PB periodically (7.1.).
+	If it receives a PR message back, it means there is a node considering it as a
+	possible Proxy and wants to measure the connection. The procedure is as follows:
+		1) After sending a PB with a certain PBID, receives a PR (4.4.) for that
+		same PBID;
+		2) Associates the Sender IP to the received PRs' "Quality" and "Distance";
+		3) Sends a PC Message with the "Quality" of the received PR message;
+		4) Uses the newly received information to see if there is now a possibly
+		better route to the Master.
+
+		5.5. Finding better routes
+
+	When a Slave receives a PB with a "Distance" that hints at a better route (7.9.).
+	It then starts the following process:
+		1) Receives a PB with a potentially beneficial Distance;
+		2) If a PR is already being retransmited, does nothing;
+		2) Otherwise, sends a PR with the same PBID as in the received PB,
+		as well as the Quality of the received PB, and its' current best distance
+		to Master, to the PB originator Slave.
+		3) Eventually receives a PC (4.5.) from said Slave;
+		4) Uses the newly received information to see if there is now a possibly
+		better route to the Master.
+
+		5.6. Generating a Timetable
+
+	When the Master receives an NER/NE Message, it checks if there is already a timetable
+	in transmission.
+	If there is, and it has been transmitted at least once, ignores the NER/NE (doesn't
+	reply). This will trigger retransmission of NER/NE later on, which will eventually
+	reach the Master after TB retransmission has ended.
+	
+	If there isn't or it hasn't been transmitted, it updates the table and sends an NEA/NEP.
+	
+	Updating and Generating a Timetable are synonyms in this context. A Timetable is
+	generated as follows
+		The new timetable has a timeslot for every new Slave, and one for the Master.
+		A TB with the currently required Slaves (which starts with all the currently
+		known Slaves as "1") is generated.
+		The validity delay is calculated according to 7.7. .
+		The PBID starts at 0
+	
+	If there is no current deadline, it sets a generation deadline (7.5.).
+	When that deadline is reached, the timetable begins transmission (5.7.).
+		This reduces network convergence time by allowing multiple simultaneous
+		requests to be included in the "next Timetable" by updating the TB.
+	The Timetable generation equation is explained further in 7.6. .
+	
+
+		5.7. Transmitting a Timetable
+
+	On the Master.
+		1) The Timetable is sent periodically (7.8.);
+		2) For each TA received, the respective bit is set to 0 in the 
+		required IP bitmap for the next TB Message;
+		3) The Master keeps re-transmitting the TB until until one of
+		two situations occur.
+			1) All Slaves reply with a TA, in which case the Master just
+			stops the retransmision.
+			2) The maximum ammount of retransmissions is reached (7.12) in
+			which case the Master starts a new Timetable without the
+			unacknowledged Slaves.
+
+		5.8. Receiving a Timetable
+
+		1) While TBs are received that have the slaves' bitmap position as 1,
+		it sends TA Messages;
+		2) If the slave is a Proxy (5.3);
+		3) Once the timetable is valid, the Slave begins using it (transmitting
+		only on its respective timeslot).
+
+
+		5.9. Slave to Master Communication
+
+	Each Slave continuously transmits a broadcast that contains its' connection info,
+	and also listens to other Slave broadcasts. Through these, plus the mechanism in
+	5.5., they determine their best Next Hop.
+	All communications with the Master are sent to the Next Hop, that then sends it
+	to its' Next Hop, and so on, until the message reaches the Master.
+
+
+		5.11. Detecting route loss
+	
+	Each node listens to the messages of its' next hops' message to check if it's still
+	alive;
+	After a certain amount of time (7.2) without hearing anything from the Next Hop, that
+	route is considered unavailable and the Next Hop should be removed from the routing
+	table as well as all lists;
+	If there is an entry in the Routing Table (that is'nt a sub-slave)
+	The node now has no NextHop but it's sub-Slaves still think they do and will behave as
+	such.
+	The node should sleep for a period (7.15) after which it should reset itself.
+	
+
+		5.12. Acknowledgements (DEPRECATED)
+
+	Each node can listen to the retransmission of its SD messages to check if
+	the next hop has received and retransmitted it.
+
+		5.13. Synchronization (DEPRECATED)
+
+	Every time a Slave receives a TB from its' Proxy, it uses the synchronization
+	timestamp to correct its' own clock (virtually).
+	The last thing a Slave must do before re-sending any TB, is to update its' synchronization
+	with the difference from the time that TB arrived, to the time it is being transmitted.
+
+	6. Edge Cases
+
+		6.1. Failure after PB (Solved)
+
+	After an "Inside" node sends a PB, it fails and doesn't come back up.
+
+	The solution is for nodes that received the PB to timeout (NE 7.3.) or
+	or not retransmit (PR).
+
+		6.2. Infinite NER/NEA loop between two nodes (Solved)
+
+	In the following situation
+	M (Master) <-> IS1 (Inside Slave 1) <-> IS2 <-> IS3 <-> OS4 (Outside Slave 4),
+	an NER transmitted by IS3 must be retransmitted by IS2 and then IS1;
+	However, IS2 will hear IS1s' retransmition and might think it needs to retransmit it;
+	IS1 will then do the same;
+	This results in an infinite back and forth between IS1 and IS2;
+	The same situation might happen with NEA.
+
+	Since an NER must be sent before an NEA is received, the solution is for nodes that
+	receive an NER (5.3) only to retransmit it if it isn't already been received (present
+	in the "Outside Pending" List);
+	Then, when an NEA is received, if an NER was received before (present in the "Outside
+	Pending" list), it is removed from the list and the NEA retransmited.
+
+
+		6.3. Infinite TA loop between two nodes (Solved)
+
+	Assuming the setup in 6.2.
+	A TA sent by IS3 must be retransmited by IS2 and then by IS1;
+	The TA retransmited by IS1 is also received by IS2;
+	This results in an infinite back and forth between IS1 and IS2.
+
+	The solution is to use the PBID of the TA in a very specific way;
+	With every retransmited TA, the PBID increases by one;
+	With every new TB, the TA PBID is reset to 0;
+	When a node receives a TA, if the PBID-IP pair does not exist or the old PBID is lower
+	than the received one, the TA is retransmitted and the new pair inserted (the old one
+	removed if it existed);
+	When a node receives a TB, it resets all the PBID-IP pairs for the TA PBID table.
+	This ensures no loops occur, no matter how many new TBs/TAs are sent.
+
+		6.4. Infinite TB loop between two nodes (Solved)
+
+	Assuming the setup in 6.2.
+	A TB sent by M bust be retransmited by IS1 and then by IS2;
+	The TB retransmited by IS2 is also received by IS1;
+	This results in an infinite back and forth between IS1 and IS2.
+
+	The solution is to use the PBID of the TB in a very specific way;
+	With every retransmission, the TB PBID is increased by one;
+	With every new TB, the TB PBID is reset to 0;
+	When a node receives a TB, it retransmits it if the PBID is 0 and the TB brings
+	a new Timetable, or the PBID is "newer" than the old one, and there are Sub-Slaves
+	that need to acknowledge it.
+
+		6.5. Same distance as Proxy (Solved)
+
+	If a node A has an extremely good link with to the Master and a node B has an
+	extremely good link to node A but no connection to the Master, the Distance
+	equation 7.9 may generate the same distance for both A and B.
+	This may cause A (Bs' proxy) to think B has a better connection to the Master
+	and a loop may be created in the network between these nodes.
+
+	Since Bs distance will always be equal to, or less than As, the solution is to
+	implement a minimum required to change Distance.
+	This constant (7.14) can be as low as 1, but this wouldn't prevent 6.6, which
+	will explain the actual value, described in 9.4.
+
+		6.6. Distance thrashing (Solved)
+
+	If node A has similar connections to nodes B and C, that have similar "Distance
+	to Master", depending on link fluctuations, it may continuously swap between
+	those nodes.
+	This swap does not require any additional overhead except on node A itself, and
+	even that may be negligible.
+	Nonetheless, it is reasonable to implement a certain threshold (7.14) that prevents this
+	behavior.
+
+		6.7. Route loss loop (Solved)
+
+	When a total route loss is detected, the network may start looping since there is
+	no message that a Proxy can send to their Sub-Slave indicating that they don't have
+	a connection anymore.
+	A simple solution to this is having every node update the LastHeard of every node in
+	their routing table and the node that detected total route loss sleep for a greater
+	amount of time than it takes their Sub-Slaves to assume it is dead, and then restart.
+	When a node is restarted this way, since the network is static by nature, the nodes
+	that could contact him think he is dead and
+
+	7. Relevant numbers and Equations (Solved)
+
+		7.1. Broadcast rate
+
+	The rate at which the master sends PB messages:
+	* Once every 0.5 seconds when no Slave is paired;
+	* Once every 5 seconds when there are Slaves registered.
+	The rate at which registered Slaves send PB Messages:
+	* Once every 2 seconds.
+
+
+		7.2. Route Loss Timeout
+
+	Obtained from simulations
+
+		7.3. Network Entry Pending timeout
+
+	The timeout that triggers a retransmition of another NE message
+	* Random value from [0.5, 2]s
+
+		7.4. Network Entry Accept timeout
+
+	The timeout that triggers a retransmition of another NER message
+	* Random value from [0.5, 2]s
+
+		7.5. Timetable Generation deadline
+
+	The deadline at which the new timetable is generated:
+		(first outside NER timestamp) + 5s
+	This prevents the entry of multiple nodes semi-simultaneously in the network
+	from causing multiple unnecessary timetables to be generated.
+
+		7.6. Timetable generation equation
+	
+	Due to it being 
+
+		7.7. Timetable Validity delay
+
+	Obtained from simulations	
+
+		7.8. Timetable Broadcast rate
+
+	Obtained from simulations
+
+		7.9. Distance Change Equation
+
+	The equation that determines whether a perceived Distance may result in a
+	better route than the current best route; Must prevent thrashing;
+
+		7.10. Maximum lost Messages
+
+	0, assumed packets get stale
+	
+		7.11. Number of NE transmission retries
+
+	4, simulation based
+
+		7.12. Maximum Timetable transmission retries
+
+	Until TimeTable is valid
+
+		7.13. Maximum PR transmission retries
+
+	No retry. Provides for a more stable network and simpler implementation
+
+		7.14. Minimum value difference to change Next Hop
+
+	65535/10 ≃ 6554
+
+		7.15. NextHop loss timeout
+
+	Obtained from simulations
+
+	8. Protocol requirements
+
+		* For any node S to be able to send data to the node M, connected to the
+		Hardware teams' software, there must exist at least one chain of nodes
+		that starts with S and ends with M, where each link supports bidirectional
+		communication;
+
+		* For N nodes, with data payloads of P bytes, with rate of T second,
+		the minimum required bandwidth for worst case scenario conditions, is
+		B = Bmin = (T*SD+PR+TB+TA+NER+NEP) * (N-1) * N =
+		(T*(P*8+56)+104+144+(N+1)+2N+56+40+40) * (N-1) * N (b/s)
+		So for P=256 byte payloads, 1 full payload per T=1 second, N=4 nodes, results
+		in a bare minimum of 30012 b/s);
+
+		* With each message received from their interface, the WF team sends us
+		that link endpoints' current Equivalent Bit Error Probability as a 4 byte
+		float variable on a subsequent request;
+
+		* With data message sent to the HW team, the IP of the originating node is sent;
+
+		* Given a maximum message size of 1.114.256 bits (TB with 65536 nodes), the
+		aforementioned chains must have a bare minimum quality such that the
+		Equivalent Bit Error Probability is less than 1/1.114.256 ~ 8E-7;
+		For our experiments, a maximum of 1/2104 ~ 4E-4 should suffice;
+
+	9. Equation and number proofs
+
+	We define:
+	P[A->B]
+		Equivalent Bit Error probability from node A to node B
+	k
+		Message type
+	Ppp[k]
+		Type k message, single transmission loss probability;
+	Sz[k]
+		Size of type k message (some messages have variable size, Sz always implies
+		the maximum;
+	T[k]
+		Retransmission period (seconds) of message type k;
+		Note: Some messages are not retransmited and have T[k] = inf;
+	TM[k]
+		Maximum ammount of retransmissions of message typ k;
+		Note: Some messages are retransmited indefinetely and have TM[k] = inf;
+		Note: Some messages are never retransmited and have TM[k] = 0;
+
+	L
+		sizeof("Distance to Master Variable") = 2 bytes = 16 bits
+
+
+			9.1. Distance
+	The most important metric when defining the "Distance to Master" is the full path
+	Equivalent Bit Error Probability, from node A to the Master.
+	The node respective metric is the Next Hops received Equivalent Bit Error (RemotePBE).
+	This is because the protocol assumes non-bidirectional links, and as will be
+	explained in 9.2, the "localPBE" is indiferent to calculate the Distance.
+
+	We define that "Distance to Master" must be 0 for the Master itself, and between
+	[1, L-1].
+	The shorter the Distance the better.
+	To map the full path probability unto a distance, we use:
+		D[A] = L * (1-P[A])
+	P[A] is As' current best "full path" success probability
+	To calculate P[A], we use:
+		P[A] = (1-P[A->B])*(1-DB/L)
+
+	Therefore, Node A will advertise its' "Distance to Master" (D[A]) according to the
+	following simplified equation:
+
+	D[A] = D[B] + P[A->B] * (L - D[B])
+
+	The Master is the only one that advertises a "Distance to Master" of 0 (best)
+
+	D[M] = 0;
+
+	For very low bit error probabilities, this equation will start generating equal values
+	(p.ex. for node A with 6E-5 Master reception quality and node B 1E-5, A reception
+	quality, the Distance would be 3 for both. Since the lowest acceptable error we accept
+	is (for the present experiment) 4E-4, we will insert into the equation a "correction"
+	term in the same order.
+	The final equation is:
+
+	D[A] = D[B] + P[A->B] * 1E4 * (L - D[B])
+
+			9.2. Route loss
+
+	In order for the network to be adaptable, we have to have a mechanism to detect node
+	failures and trigger the use of alternative routes.
+	This mechanism needs to be tuned so that network fluctuations in message loss does not
+	trigger it unnecessarily (false rerouting).
+
+	This mechanism is based on a "last heard" time. When the "Next Hop" was "last heard"
+	over a certain interval ago, we will consider that that node failed. This interval
+	must depend on the link, and both nodes. So for node A, with "Next Hop" B, we will
+	call this interval Ti(A). Ti(A) always references only the "Next Hop" B.
+
+	We must now relate how this interval relates to the probability of "false rerouting",
+	in order to be able to minimize it.
+	We define Ti(A) as:
+		Ti(A) = (1+P[B->A]) * Kr * T[PB]
+	This means Ti(A) belongs to the linear range of [Kr, 2Kr[ and depends on P[B->A].
+	The incentive for basing this interval on P[B->A] instead of P[A->B] is because B's
+	presence is required, but not its' connectivity to A is not.
+	So, if B is chosen as A's "Next Hop", the larger the P[B->A], the more time A should
+	wait to declare that B failed.
+
+	Kr is our main parameter in this equation.
+	We want to minimize the probability of a "false rerouting".
+	The main message used to assess liveliness is the PB.
+	The amount of PB messages that B sends during Ti(A) is
+		floor(Ti(A)/T[PB]) = floor((1+P[B->A]) * Kr)
+
+	Therefore, the probability of "false rerouting" is the probability of all these
+	messages being lost, Prr(A).
+		Prr(A) = (1-(1-P[B->A])^Sz[PB])^floor((1+P[B->A]) * Kr)
+	
+	It is obvious that the larger the K, the lower the Prr(A).
+	We will dimension Prr(A) < 1%. This can be accomplished with a Kr = 6, as long as
+	P[B->A] < 0.01.
+
+			9.3. Timetable Validity delay
+
+	We need to be as sure as is feasibly possible that all nodes received the TimeTable
+	before any node begins using it.
+
+			9.4. Distance change threshold
+	The "Distance to Master" change threshold needs to be related to its maximum value.
+	A reasonable value would be of one tenth (1/10), which in our particular case results
+	in 6554.
+
+			9.5. Timetable generation equation
+	Due to it being simpler, for both our team, as well as the WaveForm team, we decided
+	the timeslots should be the same for every node, effectively implementing a Round-Robin
+	schedulling scheme.
+	Since we know there are 4 nodes, and the data transmission is at a frequency of 1Hz,
+	
+
+	10. Possible Limitations
+	
+	The limitations in this protocol are:
+		The timeslots are the same for all nodes, this resource allocation is
+		analog to Round Robin scheduling.
+			This may result in a lower network banwidth usage efficiency,
+			and some nodes being starved;
+			This could lead to data payload messages being stuck in queues
+			and becoming stale, while newer messages begin being dropped.
+			This situation is an extreme edge case where available bandwidth
+			does not follow the .
+		
+		The used IP Address space only supports 65536 devices.
+			Since the physical limitations (discussed with the WF team) allow
+			for about 4000 devices, this shouldn't be problematic.
+		
+		The maximum amount of bytes that can be carried per message is 256.
+			This should be more than enough since the expected data rate
+			is 20Hz and each WS message carries more than 20 data points.
+
+		In 5.6., it is possible that the timetable becomes valid before all
+		nodes receive it.
+			This shouldn't be problematic as long as 7.7. is dependent on the
+			number of nodes.
+			The optimal option would be to use the largest Master->Slave distance
+			but since the protocol does not allow the Master to know that metric,
+			we use the sub-optimal alternative in 7.7.
+
+
+
+		
+
+	11. Future work
+
+		* Synchronization messages might be necessary
+
+		* The nodes can read the Timetable to get information on which nodes are
+		present and when they will speak. This information might be useful.
+
+		* Investigate the possibility of a slave to become master and a master
+		a slave by periodically checking the HW software, and how this may
+		influence the network
+
+	12. Notes
+
+		* Due to the existance of a PBID in the TB message, is the field "Sender IP"
+		necessary?
+
+		* Since the synchronization is now done via GPS, could the synchronization
+		timestamp and validity delay be removed in the TBs, and have just a validity
+		timestamp?
+
+		* Every "retransmission" period should be larger (relative) than the nodes'
+		timeslot, to avoid retransmission on the same timeslot.
+
+		* If too many samples are sent per message, then we may not afford to
+		lose them, and while an "ACK" is not received, the message should be
+		rescheduled.
+
+		* In theory, there shouldn't be any loops in the network, TTL is a
+		temporary precaution.
+
+		* When the link conditions deteriorate severely a message could
+		be sent to trigger a Proxys' Sub-Slaves to use another Next Hop.
+
+		* The same mechanism as stated in the previous point, could be used
+		when the node needs to be taken offline on purpose, to improve
+		reconfiguration time.
+
+		* Samples from multiple nodes could be multiplexed inside the payload
+		of a single SD Message, but a deeper analysis on the required times
+		needs to be made so that the buffering this feature requires does not
+		cause more damage than the benefits it brings.
+

@@ -1,0 +1,269 @@
+V1
+
+	1. Abstract
+
+	This protocols' main purpose is to auto configure a connection between
+	multiple slaves and a master, and to send sample loaded packets
+	through the slaves all the way up to the master, in the most
+	efficient route possible.
+
+	Network wise, this protocol is analogous to a tree, where the more distant
+	nodes (like leafs) connect to nodes slightly closer (branches), that
+	themselves connect to closer branches of nodes, all culminating in the master (trunk).
+	
+
+	2. Messages
+
+		2.1. Sampled Data (SD) Message Format (64+ bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Type           |  Sequence Nmb |      TTL      |      Source IP                |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	4                   5                   6                   7                   8
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|      Next Hop IP              |Sample Ammount | Sample 1 ...  | Sample 2 ...  |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	The format of the Data Packet is illustrated above, and
+	contains the following fields:
+
+	Type			1
+	(1 byte)
+
+	Sequence Nmb		The Sequence number of this packet Modulus 256
+	(1 byte)		May be replaced with a timestamp. Depending on the
+				ammount of samples per packet, will be used to reorder
+				packets
+
+	TTL			The Time To Live of the packet
+	(1 byte)
+	
+	Source IP		The original senders' IP
+	(2 bytes)
+	
+	Next Hop Ip		The IP of the next hop
+	(2 bytes)
+
+	Sample Ammount		The ammount of samples in this packet
+	(1 byte)
+	
+
+		2.2. Ping Broadcast (PB) Message Format (40 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Type           |           PBID                |Originator IP Address          |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	The format of the Ping Broadcast Message is illustrated above, and
+	contains the following fields:
+
+	Type			2
+	(1 byte)
+
+	PBID			A sequence number uniquely identifying the
+	(2 byte)		particular PB when taken in conjuction with
+				the originating node's IP address
+		
+	Originator IP		The requesting nodes' IP address
+	(2 bytes)
+
+
+		2.3. Ping Reply (PR) Message Format (72 bits)
+
+	0                   1                   2                   3                   4
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|Type           |           PBID                |       Quality                 |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+        4                   5                   6                   7
+	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	|      Source IP                |      Next Hop IP              |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+	The format of the Route Request Packet is illustrated above, and
+	contains the following fields:
+
+	Type			3
+	(1 byte)
+
+	PBID			A sequence number uniquely identifying the
+	(2 bytes)		particular PB when taken in conjuction with
+				the originating node's IP address.
+	
+	Quality			The quality of the Next Hops' connection to
+	(2 bytes)		the master;
+	                        The master is the only node with 2047 quality;
+	                        All others must limit their quality from 2046
+	                        to 1;
+	                        A value of 0 indicates unreachability.
+		
+	Source IP		The requesting nodes' IP address
+	(2 bytes)
+
+	Next Hop IP		The responding nodes' IP address
+	(2 bytes)
+
+
+
+
+	3. Protocol Operation
+
+	This section describes the scenarios under which nodes generate
+	and receive each type of message, and the actions that must follow.
+
+		3.1. Receiving a message
+
+	A node only accepts a message if:
+		* The message type is a PB (route broadcast);
+		* The next hop IP is the broadcast IP (all 1s);
+		* Its' IP is the Next Hop IP in the message.
+		* Its' IP is the Source IP and the Next Hop IP isn't the local
+		best route (the packet sent was retransmitted by the next hop,
+		and thus is admitted as an ACK)
+
+		3.2. Receiving PB messages
+	
+	When receiving a PB message, if the IP-PBID pair is present in the
+	IP-PBID table, the message is ignored.
+	Otherwise, the node must reply immediately with a PR containing the
+	effective quality of their best connection to the master and store
+	the IP-PBID pair, discarding the previous pair in the case that IP
+	was contacted previously.
+
+	If the node has no connection to the master, the node does not answer.
+	An event must then be queued for the same PBID, and when a route to
+	the master is obtained, a PR message must be sent with the correct
+	effective quality.
+	
+	Note:
+		The PBID-IP mechanism prevents nodes that already answered the
+		Broadcast from continuously doing so, so that new neighbour node
+		discovery is possible without flooding the network, as well as
+		full route updating.
+		This is especially useful for network startup, since nodes will
+		emit more broadcasts then, and also allows for a more dense
+		network.
+		This mechanism requires further study.
+
+		3.3. Receiving PR messages
+
+	When receiving a PR message, the node create/updates a routing
+	table entry with the neighbours' IP as index, with the following
+	parameters:
+		The neighbour nodes' IP
+		Effective quality
+		AvgSNR
+		Quality
+	
+	The effective quality is obtained from the following equation:
+		Q(x) = Q'(x) + AvgSNR(x)
+	Where Q' is the quality field received from the node x, and SNR(x)
+	is the average SNR of packets received from node x.
+
+	If the quality field is set to 0, the route is set as unreachable.
+
+	The effective quality factor might eventually include average CPU load
+	to allow for load balancing.
+
+	
+		3.4. Receiving SD messages
+	
+	When receiving an SD, if the receiving node is the master node,
+	it retrieves the relevant payload information, and forwards it
+	to the interface shared with the HW team.
+	
+	Otherwise, the node must retransmit the packet to its' best next hop,
+	by changing said IP, and decreasing the TTL before transmitting.
+	
+	If the TTL received is 0, the packet is dropped.
+
+	Loops in the network shouldn't be possible, so eventually the TTL
+	field might be deprecated.
+	
+		3.5. Booting Up
+	
+	When a node first comes online, it must perform some bootstraping
+		* If the node has an Internet connection, it becomes the master,
+		otherwise it considers itself a slave. This is viable since we
+		are sure that the network was properly assembled, and this method
+		avoids hard coding, allowing for a different node to become master
+		just by turning off the internet connection on the current master and
+		and turning it on the connection on the next master.
+
+		* To kickstart the network, if the node is a master, it sends a
+		PR with broadcast IP (all 1s), aka a gratuitous reply/route.
+		This makes for a faster network start.
+	
+		* If the node is a slave, while there is no route to master, it
+		periodically sends PB messages.
+
+		3.6. Populating the Routing table
+
+	As stated in 3.5., when a node comes online, it starts broadcasting
+	PB messages, and receiving PR messages back.
+	Even after receiving a valid route to the master and starting to use
+	it, the node will still listen for PR messages to update/further
+	populate the routing table.
+
+		3.7. Detecting route loss
+	
+	Each node listens to the retransmission of its' latest packets,
+	to check if the next hop has indeed received and rerouted it.
+	These are the "ACK" packets reference in 3.1.
+	When a defined number of ACK packets are missed, a new PB is
+	sent and a new route chosen.
+	Since the master does not retransmit the messages via radio,
+	the PB from the directly connected slaves will simply ensure
+	that the master is still alive.
+	This mechanism of listening to retransmissions decreases network
+	congestion (no specific ACK packets required)
+
+
+	4. Possible Limitations
+	
+	The limitations in this protocol are:
+		The used IP Address only supports 4096 devices, but since the physical
+		limitations (discussed with the WF team) allow for about 4000 devices,
+		this shouldn't be problematic.
+		
+		The ammount of samples that can be carried is 256, but this should be
+		more than enough since the expected data rate is 20Hz.
+		
+
+	5. Future work
+
+		* Synchronization messages are necessary
+
+		* Channel synchronization (tdm) is necessary
+
+
+	6. Notes
+		* If too many samples are sent per packet, then we may not afford to
+		lose them, and while an "ACK" is not received, the packet should be
+		rescheduled.
+
+		* TTL and IP size are related (a smaller IP address space means a
+		smaller TTL requirement). In theory, there shouldn't be any loops
+		in the network, TTL is a temporary precaution.
+
+		* It is possible to make each node learn which nodes are using them
+		as a relay. When the conditions deteriorate severely a message could
+		be sent to trigger a new route selection on the nodes relying on the
+		present one.
+
+		* The same mechanism as stated in the previous point, could be used
+		when the node needs to be taken offline on purpose, to improve
+		reconfiguration time.
+
+		* Samples from multiple nodes could be multiplexed inside the payload
+		of a single SD Message, but a deeper analysis on the required times
+		needs to be made so that the buffering this feature requires does not
+		cause more damage than the benefits it brings.
